@@ -182,6 +182,7 @@ const indexingProgress = (progress: StoredProgress) => {
     totalBytes,
     layer: Math.min(layer + 1, layerSizes.length),
     layerCount: layerSizes.length,
+    ...(layerSizes[layer] === undefined ? {} : { layerSize: layerSizes[layer] }),
     ...(buildProgress === undefined ? {} : { buildProgress: Math.min(buildProgress, 1) }),
   };
 };
