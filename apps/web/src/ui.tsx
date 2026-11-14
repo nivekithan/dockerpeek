@@ -90,10 +90,16 @@ function ProgressBar({ progress }: { progress: IndexingProgress | undefined }) {
       : progress.phase === "publishing"
         ? "Building file tree"
         : `Indexing layer ${progress.layer} of ${progress.layerCount}`;
-  const percent =
-    progress === undefined || progress.totalBytes === 0
+  const building = progress?.phase === "publishing";
+  const fraction =
+    progress === undefined
       ? undefined
-      : Math.round((progress.completedBytes / progress.totalBytes) * 100);
+      : building
+        ? progress.buildProgress
+        : progress.totalBytes === 0
+          ? undefined
+          : progress.completedBytes / progress.totalBytes;
+  const percent = fraction === undefined ? undefined : Math.round(fraction * 100);
 
   return (
     <div className="flex w-80 flex-col gap-3">
@@ -115,14 +121,14 @@ function ProgressBar({ progress }: { progress: IndexingProgress | undefined }) {
           className="absolute inset-y-0 left-0 rounded-full bg-linear-to-r from-emerald-400 to-amber-400 shadow-[0_0_12px] shadow-emerald-400/50 transition-[width] duration-700 ease-out"
           style={{ width: `${percent ?? 0}%` }}
         />
-        {(percent === undefined || progress?.phase === "publishing") && (
+        {percent === undefined && (
           <div
             className="absolute inset-0 bg-linear-to-r from-transparent via-emerald-300/40 to-transparent"
             style={{ animation: "layer-shine 1.6s ease-in-out infinite" }}
           />
         )}
       </div>
-      {progress !== undefined && progress.totalBytes > 0 && (
+      {progress !== undefined && !building && progress.totalBytes > 0 && (
         <p className="font-mono text-xs text-zinc-500">
           {formatSize(progress.completedBytes)} of {formatSize(progress.totalBytes)}
         </p>

@@ -20,6 +20,7 @@ import {
 import { Decompress } from "fzstd";
 import { type LayerDescriptor, Registry, type Repository } from "../registry.ts";
 import {
+  DIRECTORY_SHARDS,
   directoryShard,
   directoryShardKey,
   LayerEntry,
@@ -69,12 +70,15 @@ export class ImageIndexer extends WorkflowEntrypoint<Env, IndexImageParams> {
 
     await step.do("publish file tree", STEP_CONFIG, () =>
       runStep(
-        reportProgress(manifestDigest, {
-          phase: "publishing",
-          layerSizes,
-          layer: layers.length,
-          completedBytes: layerSizes.reduce((sum, size) => sum + size, 0),
-        }).pipe(Effect.andThen(publishImage(manifestDigest, layers))),
+        publishImage(manifestDigest, layers, (buildProgress) =>
+          reportProgress(manifestDigest, {
+            phase: "publishing",
+            layerSizes,
+            layer: layers.length,
+            completedBytes: layerSizes.reduce((sum, size) => sum + size, 0),
+            buildProgress,
+          }),
+        ),
       ),
     );
   }
@@ -192,8 +196,26 @@ const indexLayer = Effect.fn("indexLayer")(function* (
 const publishImage = Effect.fn("publishImage")(function* (
   manifestDigest: string,
   layers: ReadonlyArray<LayerDescriptor>,
+  onProgress: (fraction: number) => Effect.Effect<void, never, Storage>,
 ) {
   const storage = yield* Storage;
+  // Work units: one per layer index loaded, then one per shard written. The shard
+  // count is only known after the merge, so the upper bound is used until then.
+  let done = 0;
+  let total = layers.length + DIRECTORY_SHARDS;
+  let reportedAt = yield* Clock.currentTimeMillis;
+  const reporting = yield* Semaphore.make(1);
+  const advance = Effect.fn("publishImage.advance")(
+    function* () {
+      done += 1;
+      const now = yield* Clock.currentTimeMillis;
+      if (now - reportedAt < PROGRESS_INTERVAL_MS) return;
+      reportedAt = now;
+      yield* onProgress(done / total);
+    },
+    (effect) => reporting.withPermit(effect),
+  );
+  yield* onProgress(0);
 
   const counts = yield* Effect.forEach(layers, (layer) =>
     storage.head(layerIndexKey(layer.digest)),
@@ -214,6 +236,7 @@ const publishImage = Effect.fn("publishImage")(function* (
     if (entries === undefined)
       return yield* new TarError({ message: `layer ${layer.digest} has not been indexed` });
     applyLayer(root, entries, index);
+    yield* advance();
   }
 
   const shards = new Map<number, Record<string, StoredDirShard[string]>>();
@@ -226,9 +249,13 @@ const publishImage = Effect.fn("publishImage")(function* (
     }
     listings[directory.path] = { entries: directory.entries };
   }
+  total = layers.length + shards.size;
   yield* Effect.forEach(
     shards,
-    ([shard, listings]) => storage.putJson(directoryShardKey(manifestDigest, shard), listings),
+    ([shard, listings]) =>
+      storage
+        .putJson(directoryShardKey(manifestDigest, shard), listings)
+        .pipe(Effect.andThen(advance())),
     { concurrency: PUBLISH_CONCURRENCY, discard: true },
   );
   const marker: ReadyMarker = { layers: layers.map((layer) => layer.digest) };

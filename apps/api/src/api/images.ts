@@ -174,7 +174,7 @@ const imageStatus = Effect.fn("Images.imageStatus")(function* (manifestDigest: s
 
 /** Byte totals are aggregated by the indexer across both active layers. */
 const indexingProgress = (progress: StoredProgress) => {
-  const { phase, layerSizes, layer, completedBytes } = progress;
+  const { phase, layerSizes, layer, completedBytes, buildProgress } = progress;
   const totalBytes = layerSizes.reduce((total, size) => total + size, 0);
   return {
     phase,
@@ -182,6 +182,7 @@ const indexingProgress = (progress: StoredProgress) => {
     totalBytes,
     layer: Math.min(layer + 1, layerSizes.length),
     layerCount: layerSizes.length,
+    ...(buildProgress === undefined ? {} : { buildProgress: Math.min(buildProgress, 1) }),
   };
 };
 

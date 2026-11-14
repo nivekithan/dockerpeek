@@ -111,6 +111,8 @@ export const StoredProgress = Schema.Struct({
   /** 0-based index of the first unfinished layer. */
   layer: Schema.Number,
   completedBytes: Schema.Number,
+  /** Fraction of the file tree build completed, from 0 to 1. */
+  buildProgress: Schema.optionalKey(Schema.Number),
 });
 export type StoredProgress = typeof StoredProgress.Type;
 
@@ -260,4 +262,4 @@ class StorageBucket extends Context.Service<StorageBucket, R2Bucket>()(
 /** R2 requires every multipart part except the last to have the same size, of at least 5 MiB. */
 const PART_SIZE = 8 * 1024 * 1024;
 const UPLOAD_CONCURRENCY = 2;
-const DIRECTORY_SHARDS = 128;
+export const DIRECTORY_SHARDS = 128;

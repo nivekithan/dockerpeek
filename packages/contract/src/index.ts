@@ -95,6 +95,8 @@ export const IndexingProgress = Schema.Struct({
   /** 1-based index of the layer being downloaded. */
   layer: Schema.Number,
   layerCount: Schema.Number,
+  /** Fraction of the file tree build completed, from 0 to 1. */
+  buildProgress: Schema.optionalKey(Schema.Number),
 });
 
 export const ImageStatusReport = Schema.Struct({
