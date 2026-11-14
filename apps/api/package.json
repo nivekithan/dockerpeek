@@ -4,10 +4,17 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "effect": "catalog:"
+    "@docker-viewer/contract": "workspace:*",
+    "auth-header": "catalog:",
+    "effect": "catalog:",
+    "evlog": "catalog:",
+    "fzstd": "catalog:",
+    "pathe": "catalog:",
+    "tar-stream": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "catalog:",
+    "@types/auth-header": "catalog:",
     "cf": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",

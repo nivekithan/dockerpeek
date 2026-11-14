@@ -1,13 +1,20 @@
 packages:
   - apps/*
+  - packages/*
 
 catalogMode: prefer
 
 catalog:
   "@cloudflare/vite-plugin": 2.0.0-beta.v.16
+  "@types/auth-header": ^1.0.6
   "@types/node": ^24
+  auth-header: ^1.0.0
   cf: 1.0.0-beta.32
   effect: 4.1.4
+  evlog: 2.35.1
+  fzstd: ^0.1.1
+  pathe: ^2.0.3
+  tar-stream: 3.2.2
   typescript: ^7.0.2
   vite: npm:@voidzero-dev/vite-plus-core@1.6.0
   vite-plus: 1.6.0
