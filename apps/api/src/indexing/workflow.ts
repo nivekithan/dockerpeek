@@ -6,17 +6,29 @@ import {
   type WorkflowStepConfig,
 } from "cloudflare:workers";
 import { NonRetryableError } from "cloudflare:workflows";
-import { Cause, Effect, Exit, Layer, ManagedRuntime, Schema, Stream } from "effect";
+import {
+  Cause,
+  Clock,
+  Effect,
+  Exit,
+  Layer,
+  ManagedRuntime,
+  Schema,
+  Semaphore,
+  Stream,
+} from "effect";
 import { Decompress } from "fzstd";
 import { type LayerDescriptor, Registry, type Repository } from "../registry.ts";
 import {
-  directoryKey,
+  directoryShard,
+  directoryShardKey,
   LayerEntry,
   layerIndexKey,
   layerTarKey,
   type ReadyMarker,
   readyKey,
   Storage,
+  type StoredDirShard,
   type StoredProgress,
 } from "../storage.ts";
 import { TarParser } from "./tar.ts";
@@ -30,7 +42,7 @@ export const IndexImageParams = Schema.Struct({
 });
 export type IndexImageParams = typeof IndexImageParams.Type;
 
-/** Indexes one image: each layer in its own retryable step, then the merged file tree. */
+/** Indexes two layers at a time in retryable batches, then merges in manifest order. */
 export class ImageIndexer extends WorkflowEntrypoint<Env, IndexImageParams> {
   override async run(event: Readonly<WorkflowEvent<IndexImageParams>>, step: WorkflowStep) {
     const { manifestDigest, registry, repository } = event.payload;
@@ -46,30 +58,68 @@ export class ImageIndexer extends WorkflowEntrypoint<Env, IndexImageParams> {
     );
 
     const layerSizes = layers.map((layer) => layer.size);
-    const report = (layer: number, layerBytes: number, phase: StoredProgress["phase"]) =>
-      reportProgress(manifestDigest, { phase, layerSizes, layer, layerBytes });
-
-    for (const [index, layer] of layers.entries()) {
-      await step.do(`index layer ${index + 1}/${layers.length} ${layer.digest}`, STEP_CONFIG, () =>
-        runStep(
-          report(index, 0, "downloading").pipe(
-            Effect.andThen(
-              indexLayer(image, layer, (bytes) => report(index, bytes, "downloading")),
-            ),
-          ),
-        ),
+    for (let start = 0; start < layers.length; start += LAYER_CONCURRENCY) {
+      const batchStart = start;
+      await step.do(
+        `index layers ${start + 1}-${Math.min(start + LAYER_CONCURRENCY, layers.length)}/${layers.length}`,
+        STEP_CONFIG,
+        () => runStep(indexBatch(image, manifestDigest, layers, batchStart)),
       );
     }
 
     await step.do("publish file tree", STEP_CONFIG, () =>
       runStep(
-        report(layers.length, 0, "publishing").pipe(
-          Effect.andThen(publishImage(manifestDigest, layers)),
-        ),
+        reportProgress(manifestDigest, {
+          phase: "publishing",
+          layerSizes,
+          layer: layers.length,
+          completedBytes: layerSizes.reduce((sum, size) => sum + size, 0),
+        }).pipe(Effect.andThen(publishImage(manifestDigest, layers))),
       ),
     );
   }
 }
+
+/** A single serialized progress record prevents concurrent layers overwriting each other. */
+const indexBatch = Effect.fn("indexBatch")(function* (
+  repository: Repository,
+  manifestDigest: string,
+  layers: ReadonlyArray<LayerDescriptor>,
+  start: number,
+) {
+  const batch = layers.slice(start, start + LAYER_CONCURRENCY);
+  const layerSizes = layers.map((layer) => layer.size);
+  const previousBytes = layerSizes.slice(0, start).reduce((sum, size) => sum + size, 0);
+  const bytes = batch.map(() => 0);
+  const done = batch.map(() => false);
+  const reporting = yield* Semaphore.make(1);
+  const report = Effect.fn("indexBatch.report")(
+    function* (index: number, downloaded: number, complete: boolean) {
+      bytes[index] = Math.min(downloaded, batch[index]!.size);
+      done[index] = complete;
+      const unfinished = done.indexOf(false);
+      yield* reportProgress(manifestDigest, {
+        phase: "downloading",
+        layerSizes,
+        layer: start + (unfinished === -1 ? batch.length : unfinished),
+        completedBytes: previousBytes + bytes.reduce((sum, size) => sum + size, 0),
+      });
+    },
+    (effect) => reporting.withPermit(effect),
+  );
+  yield* Effect.forEach(
+    batch,
+    (layer, index) =>
+      report(index, 0, false).pipe(
+        Effect.andThen(
+          indexLayer(repository, layer, (downloaded, complete) =>
+            report(index, downloaded, complete),
+          ),
+        ),
+      ),
+    { concurrency: LAYER_CONCURRENCY, discard: true },
+  );
+});
 
 /**
  * Stores the decompressed tar of a layer and an index of its entries.
@@ -78,24 +128,27 @@ export class ImageIndexer extends WorkflowEntrypoint<Env, IndexImageParams> {
 const indexLayer = Effect.fn("indexLayer")(function* (
   repository: Repository,
   layer: LayerDescriptor,
-  onDownloaded: (bytes: number) => Effect.Effect<void, never, Storage>,
+  onDownloaded: (bytes: number, complete: boolean) => Effect.Effect<void, never, Storage>,
 ) {
   const storage = yield* Storage;
   const registry = yield* Registry;
   if ((yield* storage.head(layerIndexKey(layer.digest))) !== null) {
-    return yield* onDownloaded(layer.size);
+    return yield* onDownloaded(layer.size, true);
   }
 
   const decompressor = yield* layerDecompressor(layer.mediaType);
   let downloaded = 0;
-  let reportedAt = Date.now();
+  let reportedAt = yield* Clock.currentTimeMillis;
   const blob = (yield* registry.blob(repository, layer.digest)).pipe(
-    Stream.tap((chunk) => {
-      downloaded += chunk.byteLength;
-      if (Date.now() - reportedAt < PROGRESS_INTERVAL_MS) return Effect.void;
-      reportedAt = Date.now();
-      return onDownloaded(downloaded).pipe(Effect.provideService(Storage, storage));
-    }),
+    Stream.tap(
+      Effect.fn("indexLayer.downloadProgress")(function* (chunk) {
+        downloaded += chunk.byteLength;
+        const now = yield* Clock.currentTimeMillis;
+        if (now - reportedAt < PROGRESS_INTERVAL_MS) return;
+        reportedAt = now;
+        yield* onDownloaded(downloaded, false).pipe(Effect.provideService(Storage, storage));
+      }),
+    ),
   );
   const tar: Stream.Stream<Uint8Array, RegistryError | TarError> =
     decompressor === undefined
@@ -129,12 +182,12 @@ const indexLayer = Effect.fn("indexLayer")(function* (
   yield* storage.putJson(layerIndexKey(layer.digest), entries, {
     customMetadata: { [ENTRY_COUNT_METADATA]: String(entries.length) },
   });
+  yield* onDownloaded(layer.size, true);
 }, Effect.scoped);
 
 /**
- * Merges the indexed layers into the image's final file tree and publishes one
- * listing per directory. The ready marker is written last, so readers that see
- * it can rely on every listing existing.
+ * Merges in manifest order and groups directory listings into bounded hash shards.
+ * The ready marker is written only after all shards have been published.
  */
 const publishImage = Effect.fn("publishImage")(function* (
   manifestDigest: string,
@@ -163,12 +216,19 @@ const publishImage = Effect.fn("publishImage")(function* (
     applyLayer(root, entries, index);
   }
 
+  const shards = new Map<number, Record<string, StoredDirShard[string]>>();
+  for (const directory of directories(root)) {
+    const shard = yield* directoryShard(directory.path);
+    let listings = shards.get(shard);
+    if (listings === undefined) {
+      listings = {};
+      shards.set(shard, listings);
+    }
+    listings[directory.path] = { entries: directory.entries };
+  }
   yield* Effect.forEach(
-    directories(root),
-    (directory) =>
-      directoryKey(manifestDigest, directory.path).pipe(
-        Effect.flatMap((key) => storage.putJson(key, { entries: directory.entries })),
-      ),
+    shards,
+    ([shard, listings]) => storage.putJson(directoryShardKey(manifestDigest, shard), listings),
     { concurrency: PUBLISH_CONCURRENCY, discard: true },
   );
   const marker: ReadyMarker = { layers: layers.map((layer) => layer.digest) };
@@ -228,6 +288,7 @@ const STEP_CONFIG: WorkflowStepConfig = {
 const MAX_IMAGE_ENTRIES = 300_000;
 const ENTRY_COUNT_METADATA = "entryCount";
 const PUBLISH_CONCURRENCY = 6;
+const LAYER_CONCURRENCY = 2;
 const PROGRESS_INTERVAL_MS = 2000;
 
 const LayerIndex = Schema.Array(LayerEntry);

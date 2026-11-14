@@ -27,7 +27,7 @@ const cacheResponse = Effect.fn("HttpResponseCache")(function* <E, R>(
   const url = new URL(request.originalUrl);
   if (request.method !== "GET") return yield* handler;
 
-  url.pathname = `/v2${url.pathname}`;
+  url.pathname = `/v3${url.pathname}`;
   const cacheKey = url.href;
   const cached = yield* Effect.tryPromise(() => caches.default.match(cacheKey)).pipe(
     Effect.catch(() => Effect.succeed(undefined)),

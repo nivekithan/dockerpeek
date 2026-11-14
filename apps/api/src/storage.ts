@@ -54,19 +54,19 @@ export class Storage extends Context.Service<
 
 export const layerTarKey = (layerDigest: string) => `v2/layers/${layerDigest}/layer.tar`;
 export const layerIndexKey = (layerDigest: string) => `v2/layers/${layerDigest}/index.json`;
-export const readyKey = (manifestDigest: string) => `v2/images/${manifestDigest}/ready.json`;
-const progressKey = (manifestDigest: string) => `v2/images/${manifestDigest}/progress.json`;
+export const readyKey = (manifestDigest: string) => `v3/images/${manifestDigest}/ready.json`;
+const progressKey = (manifestDigest: string) => `v3/images/${manifestDigest}/progress.json`;
 
-/** Directory paths are hashed so that deep paths never exceed key length limits. */
-export const directoryKey = (manifestDigest: string, path: string) =>
-  Effect.promise(() => crypto.subtle.digest("SHA-256", new TextEncoder().encode(path))).pipe(
-    Effect.map((hash) => {
-      const hex = Array.from(new Uint8Array(hash), (byte) =>
-        byte.toString(16).padStart(2, "0"),
-      ).join("");
-      return `v2/images/${manifestDigest}/dirs/${hex}.json`;
-    }),
+export const directoryShardKey = (manifestDigest: string, shard: number) =>
+  `v3/images/${manifestDigest}/shards/${shard}.json`;
+
+/** Stable buckets keep both R2 keys and the number of metadata writes bounded. */
+export const directoryShard = Effect.fn("Storage.directoryShard")(function* (path: string) {
+  const hash = yield* Effect.promise(() =>
+    crypto.subtle.digest("SHA-256", new TextEncoder().encode(path)),
   );
+  return new Uint8Array(hash)[0]! % DIRECTORY_SHARDS;
+});
 
 /** One tar entry of a layer, with the byte offset of its data in the decompressed layer tar. */
 export const LayerEntry = Schema.Struct({
@@ -95,20 +95,22 @@ export const StoredDirListing = Schema.Struct({
   entries: Schema.Array(StoredDirEntry),
 });
 
-/** Written last by the indexer: its presence means every directory listing is published. */
+export const StoredDirShard = Schema.Record(Schema.String, StoredDirListing);
+export type StoredDirShard = typeof StoredDirShard.Type;
+
+/** Written last by the indexer: its presence means every metadata shard is published. */
 export const ReadyMarker = Schema.Struct({
   layers: Schema.Array(Digest),
 });
 export type ReadyMarker = typeof ReadyMarker.Type;
 
-/** Written by the indexer while it runs. Layers are indexed in order, one at a time. */
+/** Each retryable batch publishes a serialized snapshot of its two active layers. */
 export const StoredProgress = Schema.Struct({
   phase: Schema.Literals(["downloading", "publishing"]),
   layerSizes: Schema.Array(Schema.Number),
-  /** 0-based index of the layer being downloaded. */
+  /** 0-based index of the first unfinished layer. */
   layer: Schema.Number,
-  /** Compressed bytes of that layer downloaded so far. */
-  layerBytes: Schema.Number,
+  completedBytes: Schema.Number,
 });
 export type StoredProgress = typeof StoredProgress.Type;
 
@@ -168,41 +170,73 @@ const writeStream = Effect.fn("Storage.writeStream")(function* <E>(
 ) {
   const bucket = yield* StorageBucket;
   let upload: R2MultipartUpload | undefined;
-  const parts: R2UploadedPart[] = [];
   let buffer = new Uint8Array(PART_SIZE);
   let filled = 0;
 
-  const uploadPart = Effect.gen(function* () {
-    const current =
-      upload ?? (yield* r2("create multipart upload", () => bucket.createMultipartUpload(key)));
-    upload = current;
-    const part = buffer.subarray(0, filled);
-    buffer = new Uint8Array(PART_SIZE);
-    filled = 0;
-    parts.push(yield* r2("upload part", () => current.uploadPart(parts.length + 1, part)));
-  });
+  // Lazily create one upload, even if the first two parts start concurrently.
+  const getUpload = yield* Effect.cached(
+    r2("create multipart upload", () => bucket.createMultipartUpload(key)).pipe(
+      Effect.tap((current) =>
+        Effect.sync(() => {
+          upload = current;
+        }),
+      ),
+      Effect.uninterruptible,
+    ),
+  );
 
-  const write = Effect.fn("Storage.writeStream.write")(function* (chunk: Uint8Array) {
+  // Yield one part at a time rather than allocating an array of parts for a large chunk.
+  function* splitChunk(chunk: Uint8Array) {
     let offset = 0;
     while (offset < chunk.length) {
       const count = Math.min(PART_SIZE - filled, chunk.length - offset);
       buffer.set(chunk.subarray(offset, offset + count), filled);
       filled += count;
       offset += count;
-      if (filled === PART_SIZE) yield* uploadPart;
+      if (filled === PART_SIZE) {
+        const part = buffer;
+        buffer = new Uint8Array(PART_SIZE);
+        filled = 0;
+        yield part;
+      }
     }
+  }
+
+  const uploadPart = Effect.fn("Storage.writeStream.uploadPart")(function* (
+    part: Uint8Array,
+    index: number,
+  ) {
+    if (index === 0 && part.byteLength < PART_SIZE) {
+      yield* r2("put", () => bucket.put(key, part));
+      return undefined;
+    }
+    const current = yield* getUpload;
+    // Wait for native uploads to settle before aborting on cancellation or another part's failure.
+    return yield* r2("upload part", () => current.uploadPart(index + 1, part)).pipe(
+      Effect.uninterruptible,
+    );
   });
 
   yield* Effect.gen(function* () {
-    yield* Stream.runForEach(stream, write);
-    if (upload === undefined) {
-      const body = buffer.subarray(0, filled);
-      yield* r2("put", () => bucket.put(key, body));
-      return;
-    }
-    if (filled > 0) yield* uploadPart;
+    const results = yield* stream.pipe(
+      Stream.flatMap((chunk) => Stream.fromIterable(splitChunk(chunk), { chunkSize: 1 })),
+      Stream.concat(
+        Stream.suspend(() =>
+          filled === 0 ? Stream.empty : Stream.succeed(buffer.subarray(0, filled)),
+        ),
+      ),
+      Stream.mapEffect(uploadPart, { concurrency: UPLOAD_CONCURRENCY, unordered: true }),
+      Stream.runCollect,
+    );
     const completed = upload;
-    yield* r2("complete multipart upload", () => completed.complete(parts));
+    if (completed !== undefined) {
+      const parts = results
+        .filter((part) => part !== undefined)
+        .sort((a, b) => a.partNumber - b.partNumber);
+      yield* r2("complete multipart upload", () => completed.complete(parts));
+    } else if (results.length === 0) {
+      yield* r2("put", () => bucket.put(key, new Uint8Array(0)));
+    }
   }).pipe(
     Effect.onError(() => {
       const pendingUpload = upload;
@@ -225,3 +259,5 @@ class StorageBucket extends Context.Service<StorageBucket, R2Bucket>()(
 
 /** R2 requires every multipart part except the last to have the same size, of at least 5 MiB. */
 const PART_SIZE = 8 * 1024 * 1024;
+const UPLOAD_CONCURRENCY = 2;
+const DIRECTORY_SHARDS = 128;

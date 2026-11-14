@@ -89,7 +89,7 @@ function ProgressBar({ progress }: { progress: IndexingProgress | undefined }) {
       ? "Indexing image layers"
       : progress.phase === "publishing"
         ? "Building file tree"
-        : `Downloading layer ${progress.layer} of ${progress.layerCount}`;
+        : `Indexing layer ${progress.layer} of ${progress.layerCount}`;
   const percent =
     progress === undefined || progress.totalBytes === 0
       ? undefined

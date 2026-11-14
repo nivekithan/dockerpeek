@@ -15,11 +15,12 @@ import { resolve } from "pathe";
 import type { IndexImageParams } from "../indexing/workflow.ts";
 import { parseImageReference, type Platform, Registry } from "../registry.ts";
 import {
-  directoryKey,
+  directoryShard,
+  directoryShardKey,
   layerTarKey,
   Storage,
   StorageError,
-  StoredDirListing,
+  StoredDirShard,
   type StoredProgress,
 } from "../storage.ts";
 
@@ -171,14 +172,13 @@ const imageStatus = Effect.fn("Images.imageStatus")(function* (manifestDigest: s
     : ({ status: "indexing", progress: indexingProgress(progress) } as const);
 });
 
-/** Layers are indexed in order, so every layer before the current one is complete. */
+/** Byte totals are aggregated by the indexer across both active layers. */
 const indexingProgress = (progress: StoredProgress) => {
-  const { phase, layerSizes, layer, layerBytes } = progress;
+  const { phase, layerSizes, layer, completedBytes } = progress;
   const totalBytes = layerSizes.reduce((total, size) => total + size, 0);
-  const finishedBytes = layerSizes.slice(0, layer).reduce((total, size) => total + size, 0);
   return {
     phase,
-    completedBytes: Math.min(finishedBytes + layerBytes, totalBytes),
+    completedBytes: Math.min(completedBytes, totalBytes),
     totalBytes,
     layer: Math.min(layer + 1, layerSizes.length),
     layerCount: layerSizes.length,
@@ -253,10 +253,11 @@ const listing = Effect.fn("Images.listing")(function* (
 ) {
   const storage = yield* Storage;
   const path = `/${segments.join("/")}`;
-  const stored = yield* storage.getJson(
-    yield* directoryKey(manifestDigest, path),
-    StoredDirListing,
+  const shard = yield* storage.getJson(
+    directoryShardKey(manifestDigest, yield* directoryShard(path)),
+    StoredDirShard,
   );
+  const stored = shard?.[path];
   if (stored === undefined) return yield* new PathNotFound({ path });
   return stored.entries;
 });
@@ -275,7 +276,7 @@ const parsePlatform = (input: string) => {
 };
 
 /** Workflow instance IDs only allow letters, digits, `-` and `_`. */
-const instanceId = (manifestDigest: string) => `v2-${manifestDigest.replace(":", "-")}`;
+const instanceId = (manifestDigest: string) => `v3-${manifestDigest.replace(":", "-")}`;
 
 const splitPath = (path: string) => path.split("/").filter((segment) => segment !== "");
 
