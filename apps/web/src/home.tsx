@@ -3,6 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { ArrowRight, LoaderCircle, Search } from "lucide-react";
 import { useState } from "react";
 import { describeError, openImage, run } from "./api.ts";
+import { loadRecentImages, rememberImage } from "./recent.ts";
 import { Logo } from "./ui.tsx";
 
 const EXAMPLES = [
@@ -11,19 +12,23 @@ const EXAMPLES = [
   "public.ecr.aws/docker/library/python:3.13-slim",
   "ghcr.io/astral-sh/uv:latest",
 ];
+const MAX_CHIPS = 4;
 
 export function Home() {
   const navigate = useNavigate();
   const [reference, setReference] = useState("");
+  const [recent, setRecent] = useState(loadRecentImages);
 
   const open = useMutation({
     mutationFn: (reference: string) => run(openImage(reference)),
-    onSuccess: (image, reference) =>
-      navigate({
+    onSuccess: (image, reference) => {
+      setRecent(rememberImage(reference));
+      return navigate({
         to: "/images/$digest",
         params: { digest: image.manifestDigest },
         search: { ref: reference },
-      }),
+      });
+    },
   });
 
   const submit = (imageReference: string) => {
@@ -108,22 +113,38 @@ export function Home() {
             </p>
           )}
 
-          <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
-            <span className="text-xs text-zinc-500">Try</span>
-            {EXAMPLES.map((example) => (
-              <button
-                key={example}
-                type="button"
-                disabled={open.isPending}
-                onClick={() => submit(example)}
-                className="rounded-full border border-line bg-white/[0.03] px-3 py-1 font-mono text-xs text-zinc-400 transition hover:border-emerald-400/40 hover:bg-emerald-400/10 hover:text-emerald-200 disabled:opacity-60"
-              >
-                {example.replace("public.ecr.aws/docker/library/", "")}
-              </button>
-            ))}
+          {/* Recently opened images come first, then examples not opened yet. */}
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-2 px-2">
+            {[...recent, ...EXAMPLES.filter((example) => !recent.includes(example))]
+              .slice(0, MAX_CHIPS)
+              .map((image) => (
+                <Chip key={image} reference={image} disabled={open.isPending} onOpen={submit} />
+              ))}
           </div>
         </div>
       </div>
     </main>
+  );
+}
+
+function Chip({
+  reference,
+  disabled,
+  onOpen,
+}: {
+  reference: string;
+  disabled: boolean;
+  onOpen: (reference: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      title={reference}
+      disabled={disabled}
+      onClick={() => onOpen(reference)}
+      className="max-w-40 truncate rounded-full border border-line bg-white/[0.03] px-3 py-1 font-mono text-xs text-zinc-400 transition hover:border-emerald-400/40 hover:bg-emerald-400/10 hover:text-emerald-200 disabled:opacity-60"
+    >
+      {reference.replace("public.ecr.aws/docker/library/", "")}
+    </button>
   );
 }

@@ -118,7 +118,7 @@ function ProgressBar({ progress }: { progress: IndexingProgress | undefined }) {
         className="relative h-1.5 overflow-hidden rounded-full bg-white/[0.06]"
       >
         <div
-          className="absolute inset-y-0 left-0 rounded-full bg-linear-to-r from-emerald-400 to-amber-400 shadow-[0_0_12px] shadow-emerald-400/50 transition-[width] duration-700 ease-out"
+          className="absolute inset-y-0 left-0 rounded-full bg-linear-to-r from-emerald-400 to-amber-400 shadow-[0_0_12px] shadow-emerald-400/50"
           style={{ width: `${percent ?? 0}%` }}
         />
         {percent === undefined && (
