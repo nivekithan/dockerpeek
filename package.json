@@ -3,6 +3,10 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "dev": "vp run -r --parallel dev",
+    "build": "vp run -r build"
+  },
   "devDependencies": {
     "vite-plus": "catalog:"
   },

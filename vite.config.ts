@@ -21,8 +21,6 @@ export default defineConfig({
     cache: true,
     tasks: {
       check: { command: "vp check", dependsOn: ["api#types"] },
-      dev: { command: "vp run -r --parallel dev", cache: false },
-      build: "vp run -r build",
       deploy: { command: "vp run -r deploy", cache: false },
     },
   },
