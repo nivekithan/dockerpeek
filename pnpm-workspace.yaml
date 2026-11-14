@@ -1,0 +1,28 @@
+packages:
+  - apps/*
+
+catalogMode: prefer
+
+catalog:
+  "@cloudflare/vite-plugin": 2.0.0-beta.v.16
+  "@types/node": ^24
+  cf: 1.0.0-beta.32
+  effect: 4.1.4
+  typescript: ^7.0.2
+  vite: npm:@voidzero-dev/vite-plus-core@1.6.0
+  vite-plus: 1.6.0
+overrides:
+  vite@*: "catalog:"
+peerDependencyRules:
+  allowAny:
+    - vite
+  allowedVersions:
+    vite: "*"
+minimumReleaseAgeExclude:
+  - "@cloudflare/build-output-utils@0.9.14"
+  - "@cloudflare/config@0.32.1"
+  - "@cloudflare/runtime-types@0.1.28"
+  - cf@1.0.0-beta.32
+  - miniflare@5.20261113.0-beta
+allowBuilds:
+  workerd: true
