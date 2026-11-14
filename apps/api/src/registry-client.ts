@@ -1,11 +1,11 @@
 import { RegistryError } from "@docker-viewer/contract";
 import { parse } from "auth-header";
 import { env } from "cloudflare:workers";
-import { Clock, Context, DateTime, Effect, Layer, Option, Schema } from "effect";
+import { Clock, Context, DateTime, Effect, Layer, Option, Redacted, Schema } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { initLoggerLayer, set, useLogger, withLogger } from "evlog/effect";
 
-/** Registry HTTP client with safe redirects, anonymous authentication, and shared KV tokens. */
+/** Registry HTTP client with safe redirects, Docker Hub authentication, and KV tokens. */
 export class RegistryHttpClient extends Context.Service<
   RegistryHttpClient,
   HttpClient.HttpClient.With<RegistryError>
@@ -33,6 +33,10 @@ export class RegistryHttpClient extends Context.Service<
         Context.pick(HttpClient.HttpClient),
         Context.add(RegistryTransport, transport),
         Context.add(RegistryTokens, env.REGISTRY_TOKENS),
+        Context.add(DockerHubCredentials, {
+          username: env.DOCKERHUB_USERNAME,
+          pat: Redacted.make(env.DOCKERHUB_PAT),
+        }),
       );
       return transport.pipe(
         HttpClient.transform((response, request) =>
@@ -79,7 +83,8 @@ const authorize = Effect.fn("RegistryHttpClient.authorize")(function* (
   log.set({ auth: { challenge: "bearer" } });
   yield* discardResponse(response);
   const client = yield* RegistryTransport;
-  const { token, fromCache } = yield* fetchToken(challenge);
+  const dockerHub = dockerHubAuth(request, challenge);
+  const { token, fromCache } = yield* fetchToken(challenge, dockerHub);
   const authenticated = yield* client.execute(HttpClientRequest.bearerToken(request, token));
   if (authenticated.status !== 401) return authenticated;
   if (!fromCache) {
@@ -88,7 +93,7 @@ const authorize = Effect.fn("RegistryHttpClient.authorize")(function* (
   }
   log.set({ auth: { cachedTokenRejected: true, refreshAttempted: true } });
   yield* discardResponse(authenticated);
-  const fresh = yield* fetchToken(challenge, true);
+  const fresh = yield* fetchToken(challenge, dockerHub, true);
   const retried = yield* client.execute(HttpClientRequest.bearerToken(request, fresh.token));
   log.set({ auth: { freshTokenRejected: retried.status === 401 } });
   return retried;
@@ -96,6 +101,7 @@ const authorize = Effect.fn("RegistryHttpClient.authorize")(function* (
 
 const fetchToken = Effect.fn("RegistryHttpClient.fetchToken")(function* (
   challenge: BearerChallenge,
+  dockerHub: boolean,
   forceRefresh = false,
 ) {
   const log = yield* useLogger<RegistryRequestEvent>();
@@ -112,7 +118,11 @@ const fetchToken = Effect.fn("RegistryHttpClient.fetchToken")(function* (
   if (challenge.service !== undefined) url.searchParams.set("service", challenge.service);
   if (challenge.scope !== undefined) url.searchParams.set("scope", challenge.scope);
   const cache = yield* RegistryTokens;
-  const key = yield* tokenCacheKey(url);
+  const credentials = yield* DockerHubCredentials;
+  const identity = dockerHub
+    ? `${credentials.username}:${Redacted.value(credentials.pat)}`
+    : "anonymous";
+  const key = yield* tokenCacheKey(url, identity);
   record({ host: url.hostname, cacheKey: key });
   yield* Effect.annotateCurrentSpan({ "server.address": url.hostname, "cache.key": key });
   if (!forceRefresh) {
@@ -136,7 +146,11 @@ const fetchToken = Effect.fn("RegistryHttpClient.fetchToken")(function* (
   record({ stage: "fetch", fetchAttempted: true });
   const requestedAt = yield* Clock.currentTimeMillis;
   const client = yield* RegistryTransport;
-  const response = yield* client.get(url);
+  let tokenRequest = HttpClientRequest.get(url);
+  if (dockerHub) {
+    tokenRequest = HttpClientRequest.basicAuth(tokenRequest, credentials.username, credentials.pat);
+  }
+  const response = yield* client.execute(tokenRequest);
   record({ status: response.status });
   if (response.status !== 200) {
     return yield* new RegistryError({
@@ -145,7 +159,7 @@ const fetchToken = Effect.fn("RegistryHttpClient.fetchToken")(function* (
   }
   record({ stage: "decode_response" });
   const body = yield* response.text.pipe(
-    Effect.mapError((cause) => new RegistryError({ message: cause.message })),
+    Effect.mapError(() => new RegistryError({ message: "could not read token response" })),
   );
   const decoded = yield* Schema.decodeUnknownEffect(TokenResponse)(body).pipe(
     Effect.mapError(
@@ -183,6 +197,19 @@ const fetchToken = Effect.fn("RegistryHttpClient.fetchToken")(function* (
   return { token, fromCache: false };
 });
 
+/** Only send Docker Hub credentials to its trusted token endpoint. */
+const dockerHubAuth = (
+  request: HttpClientRequest.HttpClientRequest,
+  challenge: BearerChallenge,
+) => {
+  const registry = URL.parse(request.url);
+  const realm = URL.parse(challenge.realm);
+  return (
+    registry?.origin === "https://registry-1.docker.io" &&
+    realm?.href === "https://auth.docker.io/token"
+  );
+};
+
 interface RegistryRequestEvent {
   registry?: string;
   method?: string;
@@ -207,8 +234,10 @@ interface TokenAttempt {
   stage?: "validate_endpoint" | "fetch" | "decode_response" | "cache_write" | "complete";
 }
 
-const tokenCacheKey = (url: URL) =>
-  Effect.promise(() => crypto.subtle.digest("SHA-256", new TextEncoder().encode(url.href))).pipe(
+const tokenCacheKey = (url: URL, identity: string) =>
+  Effect.promise(() =>
+    crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${identity}\n${url.href}`)),
+  ).pipe(
     Effect.map(
       (hash) =>
         `token:sha256:${Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("")}`,
@@ -250,6 +279,11 @@ class RegistryTransport extends Context.Service<
 class RegistryTokens extends Context.Service<RegistryTokens, KVNamespace>()(
   "docker-viewer/Registry/Tokens",
 ) {}
+
+class DockerHubCredentials extends Context.Service<
+  DockerHubCredentials,
+  { readonly username: string; readonly pat: Redacted.Redacted<string> }
+>()("docker-viewer/Registry/DockerHubCredentials") {}
 
 const BearerChallenge = Schema.Struct({
   realm: Schema.String,

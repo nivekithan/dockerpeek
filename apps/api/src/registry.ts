@@ -20,6 +20,8 @@ export type Platform = typeof Platform.Type;
 export const LayerDescriptor = Schema.Struct({
   digest: Digest,
   mediaType: Schema.String,
+  /** Compressed size in bytes, as listed in the manifest. */
+  size: Schema.Number,
 });
 export type LayerDescriptor = typeof LayerDescriptor.Type;
 

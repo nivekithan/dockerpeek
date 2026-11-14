@@ -6,6 +6,12 @@ export class Storage extends Context.Service<
   Storage,
   {
     getReadyMarker(manifestDigest: string): Effect.Effect<ReadyMarker | undefined, StorageError>;
+    /** Changes while indexing runs, so it must never be served from a cache. */
+    getProgress(manifestDigest: string): Effect.Effect<StoredProgress | undefined, StorageError>;
+    putProgress(
+      manifestDigest: string,
+      progress: StoredProgress,
+    ): Effect.Effect<void, StorageError>;
     head(key: string): Effect.Effect<R2Object | null, StorageError>;
     getJson<S extends Schema.Top & { readonly DecodingServices: never }>(
       key: string,
@@ -30,6 +36,10 @@ export class Storage extends Context.Service<
       const services = Context.make(StorageBucket, env.STORAGE);
       return Storage.of({
         getReadyMarker: (digest) => getReadyMarker(digest).pipe(Effect.provide(services)),
+        getProgress: (digest) =>
+          getJson(progressKey(digest), StoredProgress).pipe(Effect.provide(services)),
+        putProgress: (digest, progress) =>
+          putJson(progressKey(digest), progress).pipe(Effect.provide(services)),
         head: (key) => head(key).pipe(Effect.provide(services)),
         getJson: (key, schema) => getJson(key, schema).pipe(Effect.provide(services)),
         putJson: (key, value, options) =>
@@ -45,6 +55,7 @@ export class Storage extends Context.Service<
 export const layerTarKey = (layerDigest: string) => `v2/layers/${layerDigest}/layer.tar`;
 export const layerIndexKey = (layerDigest: string) => `v2/layers/${layerDigest}/index.json`;
 export const readyKey = (manifestDigest: string) => `v2/images/${manifestDigest}/ready.json`;
+const progressKey = (manifestDigest: string) => `v2/images/${manifestDigest}/progress.json`;
 
 /** Directory paths are hashed so that deep paths never exceed key length limits. */
 export const directoryKey = (manifestDigest: string, path: string) =>
@@ -89,6 +100,17 @@ export const ReadyMarker = Schema.Struct({
   layers: Schema.Array(Digest),
 });
 export type ReadyMarker = typeof ReadyMarker.Type;
+
+/** Written by the indexer while it runs. Layers are indexed in order, one at a time. */
+export const StoredProgress = Schema.Struct({
+  phase: Schema.Literals(["downloading", "publishing"]),
+  layerSizes: Schema.Array(Schema.Number),
+  /** 0-based index of the layer being downloaded. */
+  layer: Schema.Number,
+  /** Compressed bytes of that layer downloaded so far. */
+  layerBytes: Schema.Number,
+});
+export type StoredProgress = typeof StoredProgress.Type;
 
 export class StorageError extends Schema.TaggedError<StorageError>()("StorageError", {
   message: Schema.String,

@@ -23,7 +23,7 @@ export function Explorer() {
   if (status.isPending) content = <Spinner label="Checking image…" />;
   else if (status.isError) content = <ErrorMessage>{describeError(status.error)}</ErrorMessage>;
   else if (status.data.status === "indexing")
-    content = <IndexingAnimation label="Indexing image layers" />;
+    content = <IndexingAnimation progress={status.data.progress} />;
   else if (status.data.status === "failed")
     content = (
       <ErrorMessage>

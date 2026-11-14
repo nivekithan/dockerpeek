@@ -18,6 +18,8 @@ export default defineConfig({
       subrequests: 1_000_000,
     },
     env: {
+      DOCKERHUB_USERNAME: bindings.text("nivekithan"),
+      DOCKERHUB_PAT: bindings.secret(),
       REGISTRY_TOKENS: bindings.kv(),
       STORAGE: bindings.r2({ name: "docker-viewer" }),
       IMAGE_INDEXER: bindings.workflow({

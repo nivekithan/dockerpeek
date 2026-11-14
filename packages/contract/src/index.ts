@@ -87,9 +87,20 @@ export const ImageSummary = Schema.Struct({
   status: ImageStatus,
 });
 
+/** Compressed layer bytes downloaded so far, then the final file tree build. */
+export const IndexingProgress = Schema.Struct({
+  phase: Schema.Literals(["downloading", "publishing"]),
+  completedBytes: Schema.Number,
+  totalBytes: Schema.Number,
+  /** 1-based index of the layer being downloaded. */
+  layer: Schema.Number,
+  layerCount: Schema.Number,
+});
+
 export const ImageStatusReport = Schema.Struct({
   status: ImageStatus,
   error: Schema.optionalKey(Schema.String),
+  progress: Schema.optionalKey(IndexingProgress),
 });
 
 export const DirectoryEntry = Schema.Struct({

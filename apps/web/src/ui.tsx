@@ -1,5 +1,9 @@
 import { Box, CircleAlert, LoaderCircle } from "lucide-react";
+import type { IndexingProgress as IndexingProgressSchema } from "@docker-viewer/contract";
 import type { CSSProperties, ReactNode } from "react";
+import { formatSize } from "./format.ts";
+
+type IndexingProgress = typeof IndexingProgressSchema.Type;
 
 export function Spinner({ label, children }: { label: string; children?: ReactNode }) {
   return (
@@ -41,8 +45,8 @@ const LAYERS = [
   { lift: "52px", tint: "from-amber-500/30 to-amber-500/5", border: "border-amber-400/40" },
 ];
 
-/** Image layers separating and merging back into one filesystem. */
-export function IndexingAnimation({ label }: { label: string }) {
+/** Image layers separating and merging back into one filesystem, with real progress when known. */
+export function IndexingAnimation({ progress }: { progress: IndexingProgress | undefined }) {
   return (
     <div className="relative isolate flex h-full flex-col items-center justify-center gap-10 overflow-hidden">
       <div aria-hidden className="bg-grid pointer-events-none absolute inset-0 -z-10" />
@@ -74,7 +78,55 @@ export function IndexingAnimation({ label }: { label: string }) {
           ))}
         </div>
       </div>
-      <p className="text-sm text-zinc-300">{label}</p>
+      <ProgressBar progress={progress} />
+    </div>
+  );
+}
+
+function ProgressBar({ progress }: { progress: IndexingProgress | undefined }) {
+  const label =
+    progress === undefined
+      ? "Indexing image layers"
+      : progress.phase === "publishing"
+        ? "Building file tree"
+        : `Downloading layer ${progress.layer} of ${progress.layerCount}`;
+  const percent =
+    progress === undefined || progress.totalBytes === 0
+      ? undefined
+      : Math.round((progress.completedBytes / progress.totalBytes) * 100);
+
+  return (
+    <div className="flex w-80 flex-col gap-3">
+      <div className="flex items-baseline justify-between text-sm">
+        <span className="text-zinc-200">{label}</span>
+        {percent !== undefined && (
+          <span className="font-mono text-xs text-zinc-400">{percent}%</span>
+        )}
+      </div>
+      <div
+        role="progressbar"
+        aria-label={label}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent}
+        className="relative h-1.5 overflow-hidden rounded-full bg-white/[0.06]"
+      >
+        <div
+          className="absolute inset-y-0 left-0 rounded-full bg-linear-to-r from-emerald-400 to-amber-400 shadow-[0_0_12px] shadow-emerald-400/50 transition-[width] duration-700 ease-out"
+          style={{ width: `${percent ?? 0}%` }}
+        />
+        {(percent === undefined || progress?.phase === "publishing") && (
+          <div
+            className="absolute inset-0 bg-linear-to-r from-transparent via-emerald-300/40 to-transparent"
+            style={{ animation: "layer-shine 1.6s ease-in-out infinite" }}
+          />
+        )}
+      </div>
+      {progress !== undefined && progress.totalBytes > 0 && (
+        <p className="font-mono text-xs text-zinc-500">
+          {formatSize(progress.completedBytes)} of {formatSize(progress.totalBytes)}
+        </p>
+      )}
     </div>
   );
 }

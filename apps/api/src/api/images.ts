@@ -14,7 +14,14 @@ import { HttpApiBuilder } from "effect/http-api";
 import { resolve } from "pathe";
 import type { IndexImageParams } from "../indexing/workflow.ts";
 import { parseImageReference, type Platform, Registry } from "../registry.ts";
-import { directoryKey, layerTarKey, Storage, StorageError, StoredDirListing } from "../storage.ts";
+import {
+  directoryKey,
+  layerTarKey,
+  Storage,
+  StorageError,
+  StoredDirListing,
+  type StoredProgress,
+} from "../storage.ts";
 
 export const ImagesHandlers = HttpApiBuilder.group(
   Api,
@@ -158,8 +165,25 @@ const imageStatus = Effect.fn("Images.imageStatus")(function* (manifestDigest: s
       ? ({ status: "failed" } as const)
       : ({ status: "failed", error: error.message } as const);
   }
-  return { status: "indexing" } as const;
+  const progress = yield* storage.getProgress(manifestDigest);
+  return progress === undefined
+    ? ({ status: "indexing" } as const)
+    : ({ status: "indexing", progress: indexingProgress(progress) } as const);
 });
+
+/** Layers are indexed in order, so every layer before the current one is complete. */
+const indexingProgress = (progress: StoredProgress) => {
+  const { phase, layerSizes, layer, layerBytes } = progress;
+  const totalBytes = layerSizes.reduce((total, size) => total + size, 0);
+  const finishedBytes = layerSizes.slice(0, layer).reduce((total, size) => total + size, 0);
+  return {
+    phase,
+    completedBytes: Math.min(finishedBytes + layerBytes, totalBytes),
+    totalBytes,
+    layer: Math.min(layer + 1, layerSizes.length),
+    layerCount: layerSizes.length,
+  };
+};
 
 /** Creates the indexing workflow, or restarts it after a failure. Restarts are cheap: indexed layers are skipped. */
 const startIndexing = Effect.fn("Images.startIndexing")(function* (params: IndexImageParams) {

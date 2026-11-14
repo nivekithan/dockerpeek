@@ -17,6 +17,7 @@ import {
   type ReadyMarker,
   readyKey,
   Storage,
+  type StoredProgress,
 } from "../storage.ts";
 import { TarParser } from "./tar.ts";
 import { applyLayer, directories, newDirectory } from "./tree.ts";
@@ -39,19 +40,33 @@ export class ImageIndexer extends WorkflowEntrypoint<Env, IndexImageParams> {
       runStep(
         Effect.gen(function* () {
           const layers = yield* (yield* Registry).layers(image, manifestDigest);
-          return layers.map(({ digest, mediaType }) => ({ digest, mediaType }));
+          return layers.map(({ digest, mediaType, size }) => ({ digest, mediaType, size }));
         }),
       ),
     );
 
+    const layerSizes = layers.map((layer) => layer.size);
+    const report = (layer: number, layerBytes: number, phase: StoredProgress["phase"]) =>
+      reportProgress(manifestDigest, { phase, layerSizes, layer, layerBytes });
+
     for (const [index, layer] of layers.entries()) {
       await step.do(`index layer ${index + 1}/${layers.length} ${layer.digest}`, STEP_CONFIG, () =>
-        runStep(indexLayer(image, layer)),
+        runStep(
+          report(index, 0, "downloading").pipe(
+            Effect.andThen(
+              indexLayer(image, layer, (bytes) => report(index, bytes, "downloading")),
+            ),
+          ),
+        ),
       );
     }
 
     await step.do("publish file tree", STEP_CONFIG, () =>
-      runStep(publishImage(manifestDigest, layers)),
+      runStep(
+        report(layers.length, 0, "publishing").pipe(
+          Effect.andThen(publishImage(manifestDigest, layers)),
+        ),
+      ),
     );
   }
 }
@@ -63,13 +78,25 @@ export class ImageIndexer extends WorkflowEntrypoint<Env, IndexImageParams> {
 const indexLayer = Effect.fn("indexLayer")(function* (
   repository: Repository,
   layer: LayerDescriptor,
+  onDownloaded: (bytes: number) => Effect.Effect<void, never, Storage>,
 ) {
   const storage = yield* Storage;
   const registry = yield* Registry;
-  if ((yield* storage.head(layerIndexKey(layer.digest))) !== null) return;
+  if ((yield* storage.head(layerIndexKey(layer.digest))) !== null) {
+    return yield* onDownloaded(layer.size);
+  }
 
   const decompressor = yield* layerDecompressor(layer.mediaType);
-  const blob = yield* registry.blob(repository, layer.digest);
+  let downloaded = 0;
+  let reportedAt = Date.now();
+  const blob = (yield* registry.blob(repository, layer.digest)).pipe(
+    Stream.tap((chunk) => {
+      downloaded += chunk.byteLength;
+      if (Date.now() - reportedAt < PROGRESS_INTERVAL_MS) return Effect.void;
+      reportedAt = Date.now();
+      return onDownloaded(downloaded).pipe(Effect.provideService(Storage, storage));
+    }),
+  );
   const tar: Stream.Stream<Uint8Array, RegistryError | TarError> =
     decompressor === undefined
       ? blob
@@ -148,6 +175,15 @@ const publishImage = Effect.fn("publishImage")(function* (
   yield* storage.putJson(readyKey(manifestDigest), marker);
 });
 
+/** Progress is informational, so failing to record it never fails indexing. */
+const reportProgress = Effect.fn("reportProgress")(function* (
+  manifestDigest: string,
+  progress: StoredProgress,
+) {
+  const storage = yield* Storage;
+  yield* storage.putProgress(manifestDigest, progress).pipe(Effect.ignore);
+});
+
 /** Runs a step's Effect, turning failures that a retry cannot fix into a NonRetryableError. */
 const runStep = async <A, E>(effect: Effect.Effect<A, E, Registry | Storage>) => {
   const exit = await runtime.runPromiseExit(effect);
@@ -192,6 +228,7 @@ const STEP_CONFIG: WorkflowStepConfig = {
 const MAX_IMAGE_ENTRIES = 300_000;
 const ENTRY_COUNT_METADATA = "entryCount";
 const PUBLISH_CONCURRENCY = 6;
+const PROGRESS_INTERVAL_MS = 2000;
 
 const LayerIndex = Schema.Array(LayerEntry);
 
