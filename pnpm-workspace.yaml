@@ -6,6 +6,12 @@ catalogMode: prefer
 
 catalog:
   "@cloudflare/vite-plugin": 2.0.0-beta.v.16
+  "@docker-viewer/contract": workspace:*
+  "@pierre/diffs": ^1.6.4
+  "@pierre/trees": ^1.0.0
+  "@tailwindcss/vite": ^4.3.5
+  "@tanstack/react-query": ^5.107.1
+  "@tanstack/react-router": ^1.170.46
   "@types/auth-header": ^1.0.6
   "@types/node": ^24
   auth-header: ^1.0.0
@@ -13,7 +19,9 @@ catalog:
   effect: 4.1.4
   evlog: 2.35.1
   fzstd: ^0.1.1
+  lucide-react: ^1.72.0
   pathe: ^2.0.3
+  tailwindcss: ^4.3.5
   tar-stream: 3.2.2
   typescript: ^7.0.2
   vite: npm:@voidzero-dev/vite-plus-core@1.6.0

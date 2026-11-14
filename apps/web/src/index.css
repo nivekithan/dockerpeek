@@ -1,0 +1,87 @@
+@import "tailwindcss";
+
+@theme {
+  --color-canvas: #0a0a0b;
+  --color-surface: #0f0f11;
+  --color-panel: #111113;
+  --color-raised: #18181b;
+  --color-line: rgb(161 161 170 / 0.1);
+}
+
+:root {
+  color-scheme: dark;
+  background: var(--color-canvas);
+  color: var(--color-zinc-300);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+::selection {
+  background: rgb(52 211 153 / 0.3);
+}
+
+@utility bg-grid {
+  background-image:
+    linear-gradient(to right, rgb(161 161 170 / 0.07) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(161 161 170 / 0.07) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, black 30%, transparent 100%);
+}
+
+@utility text-gradient {
+  background: linear-gradient(90deg, var(--color-emerald-300), var(--color-amber-400));
+  background-clip: text;
+  color: transparent;
+}
+
+/* Colours for @pierre/trees; custom properties inherit into its shadow root. */
+@utility tree-theme {
+  --trees-bg-override: var(--color-surface);
+  --trees-fg-override: var(--color-zinc-300);
+  --trees-fg-muted-override: var(--color-zinc-500);
+  --trees-accent-override: var(--color-emerald-400);
+  --trees-border-color-override: var(--color-line);
+  --trees-search-bg-override: var(--color-raised);
+  --trees-input-bg-override: var(--color-raised);
+  --trees-selected-bg-override: rgb(52 211 153 / 0.14);
+  --trees-selected-fg-override: var(--color-emerald-200);
+  --trees-selected-focused-border-color-override: rgb(52 211 153 / 0.5);
+  --trees-focus-ring-color-override: rgb(52 211 153 / 0.6);
+}
+
+@keyframes layer-lift {
+  0%,
+  100% {
+    transform: translateZ(0);
+  }
+  50% {
+    transform: translateZ(var(--lift));
+  }
+}
+
+@keyframes layer-shine {
+  0% {
+    transform: translateX(-120%);
+  }
+  60%,
+  100% {
+    transform: translateX(120%);
+  }
+}
+
+@keyframes glow-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 0.8;
+    transform: scale(1.05);
+  }
+}

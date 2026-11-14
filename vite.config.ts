@@ -20,7 +20,7 @@ export default defineConfig({
   run: {
     cache: true,
     tasks: {
-      check: { command: "vp check", dependsOn: ["api#types"] },
+      check: { command: "vp check", dependsOn: ["api#types", "web#types"] },
       deploy: { command: "vp run -r deploy", cache: false },
     },
   },
