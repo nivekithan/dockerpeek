@@ -4,9 +4,7 @@ Browse the filesystem of any public container image in your browser, without pul
 
 **Live:** https://dockerpeek.nivekithan.com
 
-![Home](docs/home.png)
-
-![Indexing](docs/indexing.png)
+https://github.com/user-attachments/assets/24264a4a-c042-4d5b-a59d-51b57da991c0
 
 ## Development
 
