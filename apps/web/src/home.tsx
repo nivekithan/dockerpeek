@@ -3,6 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { ArrowRight, LoaderCircle, Search } from "lucide-react";
 import { useState } from "react";
 import { describeError, openImage, run } from "./api.ts";
+import { posthog } from "./posthog.ts";
 import { loadRecentImages, rememberImage } from "./recent.ts";
 import { Logo } from "./ui.tsx";
 
@@ -23,6 +24,7 @@ export function Home() {
     mutationFn: (reference: string) => run(openImage(reference)),
     onSuccess: (image, reference) => {
       setRecent(rememberImage(reference));
+      posthog.capture("image_opened", { reference });
       return navigate({
         to: "/images/$digest",
         params: { digest: image.manifestDigest },

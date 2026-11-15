@@ -11,6 +11,7 @@
     "@tanstack/react-router": "catalog:",
     "effect": "catalog:",
     "lucide-react": "catalog:",
+    "posthog-js": "catalog:",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },

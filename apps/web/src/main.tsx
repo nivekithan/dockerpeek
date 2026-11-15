@@ -7,6 +7,7 @@ import { createRoot } from "react-dom/client";
 import { isApiError } from "./api.ts";
 import { router } from "./router.tsx";
 import "./index.css";
+import "./posthog.ts";
 
 const queryClient = new QueryClient({
   defaultOptions: {

@@ -21,6 +21,7 @@ catalog:
   fzstd: ^0.1.1
   lucide-react: ^1.72.0
   pathe: ^2.0.3
+  posthog-js: ^1.449.2
   tailwindcss: ^4.3.5
   tar-stream: 3.2.2
   typescript: ^7.0.2
@@ -39,5 +40,7 @@ minimumReleaseAgeExclude:
   - "@cloudflare/runtime-types@0.1.28"
   - cf@1.0.0-beta.32
   - miniflare@5.20261113.0-beta
+  - posthog-js@1.449.2
 allowBuilds:
+  core-js: false
   workerd: true
